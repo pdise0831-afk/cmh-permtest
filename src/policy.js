@@ -163,6 +163,16 @@ function creditChoices(policy, result, lr = 0.15) {
     else if (pk.t === 'it') W.item[pk.k] = (W.item[pk.k] ?? 0) + lr * adv;
   }
   policy.baseline = base + 0.1 * (f - base);
+  // only the ordering matters: keep each table centered so preferences do not drift
+  // up together and drown the fixed rarity/kind terms
+  for (const t of [W.key, W.stat, W.item]) centerTable(t);
+}
+
+function centerTable(t) {
+  const v = Object.values(t);
+  if (!v.length) return;
+  const m = v.reduce((a, b) => a + b, 0) / v.length;
+  for (const k of Object.keys(t)) t[k] -= m;
 }
 
 // Weights as sent to the agent: adds the mean preference used for unseen options.
@@ -172,4 +182,4 @@ function weightsForPlay(policy) {
   return { ...W, itemMean: mean(W.item), keyMean: mean(W.key) };
 }
 
-module.exports = { weightsForPlay, fitness, POLICY_FILE, PARAM_SPACE, defaults, load, save, samplePair, esUpdate, creditChoices };
+module.exports = { centerTable, weightsForPlay, fitness, POLICY_FILE, PARAM_SPACE, defaults, load, save, samplePair, esUpdate, creditChoices };
