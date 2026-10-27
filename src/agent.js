@@ -322,19 +322,21 @@
       const cands = [];
       const low = hpFrac < P.lowHp;
       // early levels come from gems: weigh them up until the build has some power
-      const xpW = P.xpW * (r.player.level < P.earlyLevel ? P.xpEarly : 1);
+      // the first levels are fragile: separate caution and goal weights for them
+      const early = r.player.level < P.earlyLevel;
+      const xpW = P.xpW * (early ? P.xpEarly : 1);
       for (let k = 0; k <= N; k++) {
         let dx = 0, dz = 0;
         if (k < N) { const a = (k / N) * Math.PI * 2; dx = Math.cos(a); dz = Math.sin(a); }
         const qx = p.x + dx * look, qz = p.z + dz * look;
         let s = 0;
-        if (goal) s += goalW * (low ? 0.25 : 1) * (dx * goal.x + dz * goal.z);
+        if (goal) s += goalW * (low ? 0.25 : 1) * (early ? P.goalEarly : 1) * (dx * goal.x + dz * goal.z);
         if (pk.xp.w > 0 && !low) {
           const m = hyp(pk.xp.x, pk.xp.z) || 1; s += xpW * (dx * pk.xp.x + dz * pk.xp.z) / m;
         }
         if (pk.special) s += 0.8 * (dx * pk.special.dx + dz * pk.special.dz) / (pk.special.d || 1);
         if (pk.heal && hpFrac < 0.7) s += (low ? 3 : 1.5) * (dx * pk.heal.dx + dz * pk.heal.dz) / (pk.heal.d || 1);
-        const fear = P.dangerW * (low ? 2 : 1);
+        const fear = P.dangerW * (low ? 2 : 1) * (early ? P.fearEarly : 1);
         let crowd = 0;
         for (const e of foes) {
           // a hit that takes a big bite of current HP is scarier

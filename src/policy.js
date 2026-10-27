@@ -34,6 +34,8 @@ const PARAM_SPACE = {
   xpEarly: [2.5, 1, 6, 0.8],
   earlyLevel: [6, 1, 20, 3],
   earlyRadius: [45, 15, 150, 20],
+  fearEarly: [2, 0.5, 5, 0.5],
+  goalEarly: [0.6, 0.1, 2, 0.2],
   crowdW: [0.6, 0, 3, 0.3],
   ultCrowd: [20, 5, 60, 8],
   // value of each map object (utility = value / (1 + distance / distScale))

@@ -38,6 +38,16 @@ async function main() {
   const pages = [];
   for (let i = 0; i < workers; i++) pages.push((await openGameRetry(browser)).page);
 
+  // the game page slowly accumulates memory over many runs: give each worker a fresh
+  // tab every few episodes instead of waiting for it to crash
+  const RECYCLE_EVERY = 6;
+  const used = pages.map(() => 0);
+  const recycle = async (w) => {
+    try { await pages[w].context().close(); } catch {}
+    pages[w] = (await openGameRetry(browser)).page;
+    used[w] = 0;
+  };
+
   const pol = policy.load();
   for (let g = 0; g < generations; g++) {
     const samples = [];
@@ -53,14 +63,13 @@ async function main() {
     await Promise.all(pages.map(async (_, w) => {
       while (queue.length) {
         const job = queue.shift();
+        if (used[w]++ >= RECYCLE_EVERY) await recycle(w);
         let res;
         try {
           res = await playEpisode(pages[w], { ...game, seed: job.seed, params: job.params, weights: policy.weightsForPlay(pol) });
         } catch (e) {
           res = { score: 0, err: String(e) };
-          // a crashed tab is replaced so the worker keeps going
-          try { await pages[w].context().close(); } catch {}
-          pages[w] = (await openGameRetry(browser)).page;
+          await recycle(w); // a crashed tab is replaced so the worker keeps going
         }
         results.set(job, res);
         console.log(`gen ${pol.generation} w${w} ${job.side}: score=${res.score} stage=${res.stage} bosses=${res.bosses} ` +
