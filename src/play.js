@@ -28,7 +28,7 @@ async function main() {
   const out = [];
   for (let i = 0; i < runs; i++) {
     const res = await playEpisode(page, {
-      params, weights: pol.weights,
+      params, weights: policy.weightsForPlay(pol),
       species: Number(o.species || 4), biome: o.biome || 'forest', tier: Number(o.tier || 0),
       turbo: !(o.watch || o.realtime),
     }, {

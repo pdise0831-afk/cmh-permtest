@@ -38,6 +38,8 @@
       this.portalTries = 0;
       this.skip = new Map(); // interactable -> game time until which it is ignored
       this.stageLog = [];
+      this.targetSince = 0; // game time when the current target was chosen
+      this.clearedAt = -1; // stage time when the final boss went down
       this.hazards = []; // telegraphed boss attacks: {line|circle, until (game time)}
       this.hookedBoss = null;
       this.jumpT = 0;
@@ -89,6 +91,32 @@
 
     // Boss attacks are telegraphed and aimed at where the player is when they are cast.
     // Wrapping the boss' attack methods records each danger zone and when it resolves.
+    // Every telegraphed area attack in the game draws its warning through
+    // vfx.telegraph (circles) or vfx.beams.spawn (lines): record those as danger zones.
+    hookTelegraphs() {
+      const r = this.run, V = r.vfx;
+      if (!V || V.__pbHooked) return;
+      V.__pbHooked = true;
+      const self = this;
+      const tele = V.telegraph.bind(V);
+      V.telegraph = (x, y, z, rad, col, dur) => {
+        try {
+          const p = r.player.pos;
+          if (rad <= 14 && hyp(x - p.x, z - p.z) < 40) self.hazards.push({ k: 'circle', x, z, r: rad, until: r.time + (dur || 1) + 0.2 });
+        } catch {}
+        return tele(x, y, z, rad, col, dur);
+      };
+      if (V.beams?.spawn) {
+        const beam = V.beams.spawn.bind(V.beams);
+        V.beams.spawn = (x1, y1, z1, x2, y2, z2, w, col, dur, ...rest) => {
+          try {
+            if (r.boss.alive && typeof dur === 'number') self.hazards.push({ k: 'line', x1, z1, x2, z2, w: (w || 1.5) * 0.5 + 0.8, until: r.time + dur + 0.8 });
+          } catch {}
+          return beam(x1, y1, z1, x2, y2, z2, w, col, dur, ...rest);
+        };
+      }
+    }
+
     hookBoss() {
       const r = this.run, B = r.boss;
       if (!B || this.hookedBoss === B) return;
@@ -225,21 +253,47 @@
       return this.run.interactables.list.find((e) => e.kind === 'portal') || null;
     }
 
+    isFinalStage() {
+      const r = this.run;
+      return r.stage >= 4 || (r.stage >= 3 && !r.biome.sanctuary);
+    }
+
+    setTarget(t) {
+      if (t !== this.target) { this.target = t; this.targetSince = this.run.time; }
+    }
+
     decide() {
       const r = this.run, p = r.player.pos, P = this.P;
       if (r.stage !== this.lastStage) {
         if (this.lastStage) this.stageLog.push({ stage: this.lastStage, t: r.time });
-        this.lastStage = r.stage; this.target = null; this.portalTries = 0; this.skip.clear();
+        this.lastStage = r.stage; this.target = null; this.portalTries = 0; this.skip.clear(); this.clearedAt = -1;
         this.log('stage start');
+      }
+      // a target we cannot reach (cliff, water, blocked) is dropped for a while
+      const tg = this.target;
+      // charging an altar takes a while: the clock only runs while we are outside it
+      if (tg && tg.kind === 'altar' && hyp(tg.x - p.x, tg.z - p.z) < tg.r) this.targetSince = r.time;
+      if (tg && tg.kind !== 'portal' && tg.kind !== 'boss' && tg.kind !== 'shrine' && r.time - this.targetSince > P.targetPatience) {
+        this.skip.set(tg, r.time + 90); this.target = null; this.log('gave up on ' + tg.kind);
       }
       if (r.stageCleared) {
         // boss down: grab the reward balls around it, then take the portal
         const loot = r.interactables.list.filter((e) => !e.used &&
           (e.kind === 'freechest' || e.kind === 'cursedchest' && P.v_cursedchest > 0 || (e.kind === 'chest' && e.data?.gift)) &&
-          hyp(e.x - p.x, e.z - p.z) < 60);
+          (this.skip.get(e) ?? -1) <= r.time && hyp(e.x - p.x, e.z - p.z) < 60);
         loot.sort((a, b) => hyp(a.x - p.x, a.z - p.z) - hyp(b.x - p.x, b.z - p.z));
-        this.mode = loot.length ? 'loot' : 'portal';
-        this.target = loot[0] || this.portal();
+        if (loot.length) { this.setTarget(loot[0]); this.mode = 'loot'; return; }
+        const portal = this.portal();
+        if (this.clearedAt < 0) this.clearedAt = r.stageTime;
+        // Last stage: the run ends at the portal. Every extra second near it still
+        // scores (time, kills, damage on an ever-tougher swarm), so hold position next
+        // to it and step in before the swarm gets dangerous.
+        const hpFrac = r.player.hp / Math.max(1, r.player.maxHp);
+        if (this.isFinalStage() && portal && r.stageTime - this.clearedAt < P.finalStay && hpFrac > P.exitHp) {
+          this.mode = 'hold'; this.target = portal;
+          return;
+        }
+        this.mode = 'portal'; this.target = portal;
         return;
       }
       if (r.bossSpawned && r.boss.alive) { this.mode = 'boss'; this.target = null; return; }
@@ -247,12 +301,12 @@
       const due = r.stageTime >= this.bossTimeFor(r.stage) || r.director?.finalSwarm;
       if (due && !r.bossSpawned) {
         this.mode = 'callBoss';
-        this.target = this.bossAltar();
+        this.setTarget(this.bossAltar());
         return;
       }
       this.mode = 'farm';
       if (this.target && (this.target.used && this.target.kind !== 'meowth' || this.interactValue(this.target) <= 0)) this.target = null;
-      if (--this.retarget <= 0 || !this.target) { this.target = this.pickTarget(); this.retarget = 10; }
+      if (--this.retarget <= 0 || !this.target) { this.setTarget(this.pickTarget()); this.retarget = 10; }
     }
 
     // ---------- low level control ----------
@@ -265,6 +319,7 @@
       const look = 2.5;
       const N = 16;
       const LOOKS = [[1.2, 1], [3, 0.6], [6, 0.35]];
+      const cands = [];
       const low = hpFrac < P.lowHp;
       // early levels come from gems: weigh them up until the build has some power
       const xpW = P.xpW * (r.player.level < P.earlyLevel ? P.xpEarly : 1);
@@ -300,11 +355,13 @@
             s -= P.shotW * Math.exp(-gap / 1.2);
           }
         }
+        let hz = 0;
         if (this.hazards.length || r.boss.pools?.length) {
           const sp = 6.3 * (r.player.stats.moveSpeed || 1);
           for (const tt of [0.25, 0.55, 0.9]) {
-            s -= P.hazardW * this.hazardAt(p.x + dx * sp * tt, p.z + dz * sp * tt, r.time + tt) * (tt === 0.9 ? 1 : 0.6);
+            hz += this.hazardAt(p.x + dx * sp * tt, p.z + dz * sp * tt, r.time + tt) * (tt === 0.9 ? 1 : 0.6);
           }
+          s -= P.hazardW * hz;
         }
         if (k < N) {
           if (!T.inBounds(qx, qz, 4)) s -= 6;
@@ -312,7 +369,14 @@
           const wl = T.waterAt ? T.waterAt(qx, qz) : -99;
           if (T.height(qx, qz) < wl - 0.55 && !r.player.types?.includes('water')) s -= 1.5;
         } else s -= 0.3; // standing still is rarely right
-        if (s > bestS) { bestS = s; best = { x: dx, z: dz }; }
+        cands.push({ x: dx, z: dz, s, hz });
+      }
+      // dodging a telegraphed hit comes first: only directions within a small margin
+      // of the safest one are allowed, the rest of the scoring picks among those
+      const minHz = Math.min(...cands.map((c) => c.hz));
+      for (const c of cands) {
+        if (c.hz > minHz + 0.15) continue;
+        if (c.s > bestS) { bestS = c.s; best = c; }
       }
       return { dir: best, foes, hpFrac };
     }
@@ -338,6 +402,7 @@
       this.decide();
       const p = r.player.pos, P = this.P;
       this.hookBoss();
+      this.hookTelegraphs();
       if (this.hazards.length) this.hazards = this.hazards.filter((h) => h.until > r.time);
       if (r.boss.alive) this.jumpWaves();
 
@@ -352,6 +417,12 @@
         // orbit: tangential plus radial correction toward the preferred distance
         const radial = clamp((d - P.bossDist) / 4, -1, 1);
         goal = { x: (bx / d) * radial - (bz / d) * 0.8, z: (bz / d) * radial + (bx / d) * 0.8 };
+        const m = hyp(goal.x, goal.z) || 1; goal.x /= m; goal.z /= m;
+      } else if (this.mode === 'hold' && tgt) {
+        // circle the portal, drifting back in when too far out
+        const dx = tgt.x - p.x, dz = tgt.z - p.z, d = hyp(dx, dz) || 1;
+        const radial = clamp((d - P.finalRadius) / 4, -1, 1);
+        goal = { x: (dx / d) * radial - (dz / d) * 0.8, z: (dz / d) * radial + (dx / d) * 0.8 };
         const m = hyp(goal.x, goal.z) || 1; goal.x /= m; goal.z /= m;
       } else if (tgt) {
         const dx = tgt.x - p.x, dz = tgt.z - p.z, d = hyp(dx, dz) || 1;
@@ -414,7 +485,7 @@
 
     scoreLevelUp(o) {
       const W = this.W;
-      let s = (W.kind[o.kind] ?? 0) + W.rarity * (o.rarity || 0) + (W.key[o.key] ?? 0);
+      let s = (W.kind[o.kind] ?? 0) + W.rarity * (o.rarity || 0) + (W.key[o.key] ?? W.keyMean ?? 0);
       if (o.kind === 'upMove') {
         const mv = this.run.player.moves[o.slot];
         if (mv) s += W.moveLevel * (1 - mv.level / Math.max(1, this.run.player.capOf(mv)));
@@ -429,7 +500,9 @@
       return s + this.noise();
     }
 
-    itemScore(key) { return (this.W.item[key] ?? 0) + this.noise(); }
+    // options never tried yet get the average preference, not zero, so they are not
+    // pushed aside forever by options that happened to be tried early
+    itemScore(key) { return (this.W.item[key] ?? this.W.itemMean ?? 0) + this.noise(); }
 
     argmax(arr, f) {
       let bi = 0, bs = -1e9;

@@ -13,6 +13,12 @@ const PARAM_SPACE = {
   bossTime1: [270, 150, 560, 60],
   bossTime2: [300, 150, 560, 60],
   bossTime3: [330, 150, 560, 60],
+  // last stage after the final boss: seconds to keep scoring next to the portal,
+  // and the HP fraction at which to step in and lock the win
+  finalStay: [300, 0, 1500, 120],
+  exitHp: [0.45, 0.15, 0.9, 0.1],
+  finalRadius: [10, 4, 30, 4],
+  targetPatience: [25, 8, 80, 8],
   // movement / survival
   goalW: [1.4, 0.3, 4, 0.4],
   dangerW: [1.6, 0.3, 5, 0.4],
@@ -157,4 +163,11 @@ function creditChoices(policy, result, lr = 0.15) {
   policy.baseline = base + 0.1 * (f - base);
 }
 
-module.exports = { fitness, POLICY_FILE, PARAM_SPACE, defaults, load, save, samplePair, esUpdate, creditChoices };
+// Weights as sent to the agent: adds the mean preference used for unseen options.
+function weightsForPlay(policy) {
+  const W = policy.weights;
+  const mean = (o) => { const v = Object.values(o); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
+  return { ...W, itemMean: mean(W.item), keyMean: mean(W.key) };
+}
+
+module.exports = { weightsForPlay, fitness, POLICY_FILE, PARAM_SPACE, defaults, load, save, samplePair, esUpdate, creditChoices };

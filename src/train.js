@@ -55,7 +55,7 @@ async function main() {
         const job = queue.shift();
         let res;
         try {
-          res = await playEpisode(pages[w], { ...game, seed: job.seed, params: job.params, weights: pol.weights });
+          res = await playEpisode(pages[w], { ...game, seed: job.seed, params: job.params, weights: policy.weightsForPlay(pol) });
         } catch (e) {
           res = { score: 0, err: String(e) };
           // a crashed tab is replaced so the worker keeps going
